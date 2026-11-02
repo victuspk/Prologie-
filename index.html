@@ -385,7 +385,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
       const w = Math.min(100, Math.round(c.pct * 100));
       const showPace = (c.type === "need" || c.type === "want") && r.isCurrent;
       return `<div class="cat">
-        <div class="cat-head"><span class="cat-name">${esc(c.name)}<span class="cat-type">${TYPES[c.type]}</span></span>
+        <div class="cat-head"><span class="cat-name">${esc(c.name)}<span class="cat-type">${TYPES[c.type]}${c.oneOff ? " · this month only" : ""}</span></span>
           <span class="pill ${c.tone}">${c.status}</span></div>
         <div class="bar ${c.tone}"><i style="width:${w}%"></i>${showPace ? `<span class="pace" style="left:${Math.round(r.frac * 100)}%" title="Where you should be today"></span>` : ""}</div>
         <div class="cat-foot num"><span>${fmt(c.spent)} of ${fmt(c.budget)}</span><span class="cat-left" style="color:${c.left < 0 ? "var(--bad)" : "var(--ink)"}">${c.left < 0 ? fmt(-c.left) + " over" : fmt(c.left) + " left"}</span></div>
@@ -487,6 +487,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
         <input id="p-budget-${i}" class="num" type="number" inputmode="decimal" min="0" value="${c.budget}" data-i="${i}" data-f="budget" aria-label="Budget for ${esc(c.name)}">
         <div class="wide"><select id="p-type-${i}" data-i="${i}" data-f="type" aria-label="Type">${Object.keys(TYPES).map((t) => `<option value="${t}" ${t === c.type ? "selected" : ""}>${TYPES[t]}</option>`).join("")}</select>
         <button class="del" type="button" data-act="rm-cat" data-i="${i}">Remove</button></div>
+        <label class="check wide" for="p-once-${i}" style="font-size:13px"><input id="p-once-${i}" type="checkbox" data-i="${i}" data-f="oneOff" ${c.oneOff ? "checked" : ""}> This month only (left out when copying to next month)</label>
       </div>`).join("");
     el.innerHTML = `
       <section class="card"><h2>${monthName(S.month)} plan</h2>
@@ -527,14 +528,14 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
   document.addEventListener("click", async (ev) => {
     const b = ev.target.closest("[data-act]"); if (!b) return;
     const act = b.dataset.act;
-    if (act === "copy-plan") { const src = S.plans[b.dataset.from]; S.draft = JSON.parse(JSON.stringify({ income: src.income, categories: src.categories })); location.hash = "plan"; go("plan"); }
+    if (act === "copy-plan") { const src = S.plans[b.dataset.from]; S.draft = JSON.parse(JSON.stringify({ income: src.income, categories: src.categories.filter((c) => !c.oneOff) })); location.hash = "plan"; go("plan"); }
     if (act === "starter") { S.draft = JSON.parse(JSON.stringify(STARTER)); location.hash = "plan"; go("plan"); }
     if (act === "add-cat") { S.draft.categories.push({ id: "c-" + uid(), name: "New category", type: "need", budget: 0 }); renderPlan(); }
     if (act === "rm-cat") { S.draft.categories.splice(Number(b.dataset.i), 1); renderPlan(); }
     if (act === "reset-draft") { S.draft = null; renderPlan(); }
     if (act === "save-plan") {
       const d = S.draft;
-      d.categories = d.categories.filter((c) => c.name.trim()).map((c) => ({ id: c.id, name: c.name.trim(), type: c.type, budget: Math.max(0, Number(c.budget) || 0) }));
+      d.categories = d.categories.filter((c) => c.name.trim()).map((c) => Object.assign({ id: c.id, name: c.name.trim(), type: c.type, budget: Math.max(0, Number(c.budget) || 0) }, c.oneOff ? { oneOff: true } : {}));
       d.income = Math.max(0, Number(d.income) || 0);
       if (await savePlan(S.month, d)) { S.draft = null; toast("Plan saved for " + monthName(S.month)); location.hash = "today"; go("today"); }
     }
@@ -547,7 +548,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
   document.addEventListener("input", (ev) => {
     const t = ev.target; if (!S.draft || !t.dataset.f || !t.closest("#view-plan")) return;
     if (t.dataset.f === "income") S.draft.income = t.value;
-    else S.draft.categories[Number(t.dataset.i)][t.dataset.f] = t.value;
+    else S.draft.categories[Number(t.dataset.i)][t.dataset.f] = t.type === "checkbox" ? t.checked : t.value;
     const allocated = sum(S.draft.categories, (c) => Number(c.budget) || 0);
     const diff = (Number(S.draft.income) || 0) - allocated;
     const box = $("allocBox");
