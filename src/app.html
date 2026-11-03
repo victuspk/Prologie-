@@ -96,7 +96,7 @@ button { cursor: pointer; }
 .chart svg { width: 100%; height: auto; display: block; }
 .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
 .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--accent); }
-.legend span.l2::before { background: var(--bad); } .legend span.l3::before { height: 2px; vertical-align: 3px; background: var(--muted); }
+.legend span.l2::before { background: var(--bad); } .legend span.l4::before { background: var(--accent-2); } .legend span.l3::before { height: 2px; vertical-align: 3px; background: var(--muted); }
 
 form, .form { display: grid; gap: 12px; }
 label { display: grid; gap: 5px; font-size: 13px; font-weight: 600; color: var(--muted); }
@@ -207,6 +207,10 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
       const spent = sum(mine, (e) => e.amount);
       const left = c.budget - spent;
       const pct = c.budget > 0 ? spent / c.budget : (spent > 0 ? 9 : 0);
+      // Big stock-up shops are taken from the budget but don't count toward the spending pace.
+      const bulk = sum(mine.filter((e) => e.bulk), (e) => e.amount);
+      const paceBudget = c.budget - bulk;
+      const pacePct = paceBudget > 0 ? (spent - bulk) / paceBudget : 0;
       let status, tone;
       if (c.type === "fixed") {
         if (spent > c.budget * 1.02) { status = "Over"; tone = "bad"; }
@@ -217,16 +221,16 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
         if (spent >= c.budget) { status = "Saved"; tone = "good"; } else { status = "To save"; tone = "neutral"; }
       } else {
         if (spent > c.budget) { status = "Over"; tone = "bad"; }
-        else if (!isFuture && pct > frac + 0.15 && pct > 0.25) { status = "Too fast"; tone = "warn"; }
+        else if (!isFuture && pacePct > frac + 0.15 && pacePct > 0.25) { status = "Too fast"; tone = "warn"; }
         else { status = "On track"; tone = "good"; }
       }
-      return Object.assign({}, c, { spent, left, pct, status, tone, count: mine.length });
+      return Object.assign({}, c, { spent, left, pct, pacePct, bulk, status, tone, count: mine.length });
     });
     const flex = cats.filter((c) => c.type === "need" || c.type === "want");
     const flexIds = new Set(flex.map((c) => c.id));
     const flexBudget = sum(flex, (c) => c.budget);
     const flexSpent = sum(flex, (c) => c.spent);
-    const spentToday = isCurrent ? sum(exps.filter((e) => e.date === today && flexIds.has(e.cat)), (e) => e.amount) : 0;
+    const spentToday = isCurrent ? sum(exps.filter((e) => e.date === today && flexIds.has(e.cat) && !e.bulk), (e) => e.amount) : 0;
     const daysLeft = isCurrent ? dim - day + 1 : isFuture ? dim : 0;
     const allowance = isCurrent ? Math.max(0, flexBudget - (flexSpent - spentToday)) / daysLeft : isFuture ? flexBudget / dim : 0;
     const todayLeft = allowance - spentToday;
@@ -234,17 +238,20 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     const totalSpent = sum(exps, (e) => e.amount);
     const allocated = sum(plan.categories, (c) => c.budget);
     const wasted = exps.filter((e) => e.wasted);
-    const daily = [];
+    const daily = [], dailyBulk = [];
     for (let d = 1; d <= dim; d++) {
       const ds = key + "-" + pad(d);
-      daily.push(sum(exps.filter((e) => e.date === ds && flexIds.has(e.cat)), (e) => e.amount));
+      const dayExps = exps.filter((e) => e.date === ds && flexIds.has(e.cat));
+      daily.push(sum(dayExps.filter((e) => !e.bulk), (e) => e.amount));
+      dailyBulk.push(sum(dayExps.filter((e) => e.bulk), (e) => e.amount));
     }
-    const projected = day > 0 ? (flexSpent / day) * dim : 0;
+    const bulkTotal = sum(dailyBulk);
+    const projected = day > 0 ? bulkTotal + ((flexSpent - bulkTotal) / day) * dim : 0;
     return {
       dim, day, frac, isCurrent, isPast, isFuture, cats, flexBudget, flexSpent, spentToday, daysLeft, allowance, todayLeft, tomorrow,
       totalSpent, income: plan.income, incomeLeft: plan.income - totalSpent, allocated, unallocated: plan.income - allocated,
       wasted, wastedTotal: sum(wasted, (e) => e.amount), wantSpent: sum(flex.filter((c) => c.type === "want"), (c) => c.spent),
-      uncategorized: exps.filter((e) => !ids.has(e.cat)), daily, projected
+      uncategorized: exps.filter((e) => !ids.has(e.cat)), daily, dailyBulk, bulkTotal, projected
     };
   }
 
@@ -255,7 +262,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     if (r.isCurrent && r.todayLeft < 0) out.push({ tone: "bad", text: `You went ${fmt(-r.todayLeft)} over today's allowance. That lowers every remaining day to <b>${fmt(r.tomorrow)}</b>.` });
     r.cats.filter((c) => c.status === "Too fast").forEach((c) => {
       const perDay = r.daysLeft > 0 ? c.left / r.daysLeft : 0;
-      out.push({ tone: "warn", text: `<b>${esc(c.name)}</b>: ${Math.round(c.pct * 100)}% used, but only ${Math.round(r.frac * 100)}% of the month has passed. Keep it under <b>${fmt(perDay)}/day</b> from now on.` });
+      out.push({ tone: "warn", text: `<b>${esc(c.name)}</b>: ${Math.round(c.pacePct * 100)}% used, but only ${Math.round(r.frac * 100)}% of the month has passed. Keep it under <b>${fmt(perDay)}/day</b> from now on.` });
     });
     if (r.wastedTotal > 0) {
       const top = r.wasted.slice().sort((a, b) => b.amount - a.amount)[0];
@@ -269,6 +276,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     }
     if (r.unallocated > 0) out.push({ tone: "warn", text: `${fmt(r.unallocated)} of your income has no job yet. Add it to Savings on the Plan tab.` });
     if (r.unallocated < 0) out.push({ tone: "bad", text: `Your plan hands out ${fmt(-r.unallocated)} more than you earn. Lower some budgets on the Plan tab.` });
+    if (r.bulkTotal > 0) out.push({ tone: "neutral", text: `Big one-off payments: ${fmt(r.bulkTotal)}. They're taken from your budgets and spread over the rest of the month, so they don't count as overspending on the day.` });
     if (r.uncategorized.length) out.push({ tone: "warn", text: `${r.uncategorized.length} expense(s) belong to a category that is no longer in your plan (${fmt(sum(r.uncategorized, (e) => e.amount))}).` });
     const unpaid = r.cats.filter((c) => c.type === "fixed" && c.status !== "Paid" && c.status !== "Over");
     if (unpaid.length && !r.isFuture) out.push({ tone: "neutral", text: `Still to pay: ${unpaid.map((c) => `${esc(c.name)} (${fmt(c.left)})`).join(", ")}.` });
@@ -407,27 +415,29 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     if (r.isFuture) return "";
     const W = 320, H = 130, pl = 34, pb = 18, pt = 8;
     const avg = r.flexBudget / r.dim;
-    const max = Math.max(avg * 1.6, ...r.daily, 1);
+    const max = Math.max(avg * 1.6, ...r.daily.map((v, i) => v + r.dailyBulk[i]), 1);
     const bw = (W - pl) / r.dim;
     const y = (v) => pt + (H - pt - pb) * (1 - v / max);
     const bars = r.daily.map((v, i) => {
-      if (i >= r.day || v <= 0) return "";
+      const b = r.dailyBulk[i];
+      if (i >= r.day || v + b <= 0) return "";
       const x = pl + i * bw + 1, h = (H - pb) - y(v);
-      return `<rect x="${x.toFixed(1)}" y="${y(v).toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${v > avg ? "var(--bad)" : "var(--accent)"}"><title>Day ${i + 1}: ${fmt(v)}</title></rect>`;
+      const bulkBar = b > 0 ? `<rect x="${x.toFixed(1)}" y="${y(v + b).toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${(y(v) - y(v + b)).toFixed(1)}" rx="1.5" fill="var(--accent-2)"><title>Day ${i + 1}: ${fmt(b)} one-off</title></rect>` : "";
+      return bulkBar + (v <= 0 ? "" : `<rect x="${x.toFixed(1)}" y="${y(v).toFixed(1)}" width="${Math.max(1, bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5" fill="${v > avg ? "var(--bad)" : "var(--accent)"}"><title>Day ${i + 1}: ${fmt(v)}</title></rect>`);
     }).join("");
     const ticks = [0, Math.round(max / 2), Math.round(max)].map((v) => `<text x="${pl - 4}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end" font-size="8" fill="var(--muted)">${v >= 1000 ? (v / 1000).toFixed(1).replace(".0", "") + "k" : v}</text><line x1="${pl}" x2="${W}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" stroke="var(--line)" stroke-width="0.5"/>`).join("");
     const days = [1, 10, 20, r.dim].map((d) => `<text x="${(pl + (d - 0.5) * bw).toFixed(1)}" y="${H - 4}" text-anchor="middle" font-size="8" fill="var(--muted)">${d}</text>`).join("");
     return `<section class="card chart"><h2>Day-to-day spending</h2>
       <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Daily spending this month compared with the planned daily average">${ticks}${bars}
       <line x1="${pl}" x2="${W}" y1="${y(avg).toFixed(1)}" y2="${y(avg).toFixed(1)}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 2"/>${days}</svg>
-      <div class="legend"><span>Under plan</span><span class="l2">Over plan</span><span class="l3">Plan: ${fmt(avg)}/day</span></div></section>`;
+      <div class="legend"><span>Under plan</span><span class="l2">Over plan</span>${r.bulkTotal > 0 ? `<span class="l4">One-off</span>` : ""}<span class="l3">Plan: ${fmt(avg)}/day</span></div></section>`;
   }
 
   let clearForm = false;
   function renderAdd() {
     const el = $("view-add");
     const keep = {};
-    if (!clearForm) ["f-amount", "f-cat", "f-note", "f-date", "f-wasted"].forEach((id) => { const n = $(id); if (n) keep[id] = n.type === "checkbox" ? n.checked : n.value; });
+    if (!clearForm) ["f-amount", "f-cat", "f-note", "f-date", "f-wasted", "f-bulk"].forEach((id) => { const n = $(id); if (n) keep[id] = n.type === "checkbox" ? n.checked : n.value; });
     clearForm = false;
     const p = plan();
     if (!S.plansLoaded) { el.innerHTML = `<section class="card"><h2>Loading…</h2></section>`; return; }
@@ -443,7 +453,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     let lastDay = "", rows = "";
     exps.forEach((e) => {
       if (e.date !== lastDay) { lastDay = e.date; rows += `<li class="day-head" style="display:block">${new Date(e.date + "T12:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</li>`; }
-      rows += `<li><span class="what"><b>${esc(e.note || names[e.cat] || "Expense")}</b><small>${esc(names[e.cat] || "Removed category")}${e.wasted ? " · wasted" : ""}</small></span>
+      rows += `<li><span class="what"><b>${esc(e.note || names[e.cat] || "Expense")}</b><small>${esc(names[e.cat] || "Removed category")}${e.bulk ? " · one-off" : ""}${e.wasted ? " · wasted" : ""}</small></span>
         <span class="amt num ${e.wasted ? "wasted" : ""}">${fmt(e.amount)}</span>
         ${S.readOnly ? "<span></span>" : `<button class="del" data-act="del" data-id="${esc(e.id)}" aria-label="Delete">✕</button>`}</li>`;
     });
@@ -454,6 +464,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
           <label for="f-cat">Category<select id="f-cat">${groups}</select></label>
           <label for="f-note">What was it?<input id="f-note" type="text" placeholder="e.g. Migros, bus card, coffee" maxlength="80"></label>
           <label for="f-date">Date<input id="f-date" type="date" value="${defDate}" min="${S.month}-01" max="${S.month}-${pad(compute(p, [], S.month, now).dim)}"></label>
+          <label class="check" for="f-bulk"><input id="f-bulk" type="checkbox" style="accent-color:var(--accent-2)"> Big one-off (stock-up shop, debt payment): spread over the month, not counted as today's overspending</label>
           <label class="check" for="f-wasted"><input id="f-wasted" type="checkbox"> I didn't really need this (counts as wasted)</label>
           <button class="btn" type="submit" ${S.readOnly ? "disabled" : ""}>Add spend</button>
         </form></section>
@@ -555,7 +566,7 @@ input[type=number], input[type=text], input[type=date], select { width: 100%; mi
     if (!(amount > 0)) { toast("Enter an amount above 0"); return; }
     const date = $("f-date").value || isoDate(new Date());
     const cat = $("f-cat").value;
-    const e = { month: date.slice(0, 7), date, amount, cat, note: $("f-note").value.trim(), wasted: $("f-wasted").checked, at: new Date().toISOString() };
+    const e = { month: date.slice(0, 7), date, amount, cat, note: $("f-note").value.trim(), wasted: $("f-wasted").checked, bulk: $("f-bulk").checked, at: new Date().toISOString() };
     if (await addExpense(e)) {
       const name = (plan().categories.find((c) => c.id === cat) || {}).name || "budget";
       toast(`Added ${fmt(amount)} to ${name}`);
